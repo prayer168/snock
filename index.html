@@ -404,15 +404,23 @@ function makeBalls(){
 }
 
 // ─── Game state ───────────────────────────────────────────────────────────────
-let balls, state, aimAngle, power, charging;
+let balls, state, aimAngle, targetAngle, power, charging;
 let mx=CW/2, my=CH/2;
 let aiTimer, aiShot;
 let playerScore, aiScore, prevPocketed, tick;
 let gameOverSfxPlayed=false;
 
+// 角度平滑插值（處理 -π/π 越界）
+function lerpAngle(a, b, t){
+  let d=b-a;
+  while(d> Math.PI) d-=Math.PI*2;
+  while(d<-Math.PI) d+=Math.PI*2;
+  return a+d*t;
+}
+
 function init(){
   balls=makeBalls(); state='player';
-  aimAngle=0; power=0; charging=false;
+  aimAngle=0; targetAngle=0; power=0; charging=false;
   aiTimer=0; aiShot=null;
   playerScore=0; aiScore=0; prevPocketed=0; tick=0;
   gameOverSfxPlayed=false;
@@ -637,6 +645,7 @@ function respawnCue(){
 function update(){
   tick++;
   if(state==='player'&&charging) power=Math.min(1,power+0.013);
+  if(state==='player') aimAngle=lerpAngle(aimAngle, targetAngle, 0.18);
 
   if(state==='moving'||state==='ai_move'){
     for(const b of balls) b.update();
@@ -714,7 +723,7 @@ function draw(){
 canvas.addEventListener('mousemove',e=>{
   const rc=canvas.getBoundingClientRect();
   mx=e.clientX-rc.left; my=e.clientY-rc.top;
-  if(state==='player'){const cb=getCue(); if(cb) aimAngle=Math.atan2(my-cb.y,mx-cb.x);}
+  if(state==='player'){const cb=getCue(); if(cb) targetAngle=Math.atan2(my-cb.y,mx-cb.x);}
 });
 
 canvas.addEventListener('mousedown',e=>{
