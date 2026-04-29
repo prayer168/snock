@@ -819,36 +819,82 @@ function drawHUD(){
 }
 
 // ─── AI logic ─────────────────────────────────────────────────────────────────
+// Check if path from (ox,oy) in direction angle for length maxT is clear of other balls
+function pathClear(ox,oy,angle,maxT,excludeA,excludeB){
+  const dx=Math.cos(angle), dy=Math.sin(angle);
+  for(const b of balls){
+    if(b===excludeA||b===excludeB||b.inPocket) continue;
+    const ex=b.x-ox, ey=b.y-oy;
+    const proj=ex*dx+ey*dy;
+    if(proj<BR||proj>maxT) continue;
+    if(Math.abs(ex*dy-ey*dx)<BR*2) return false;
+  }
+  return true;
+}
+
 function computeAIShot(){
   const cb=getCue(); if(!cb) return null;
   const targets=activeBalls(); if(!targets.length) return null;
   let best=null, bestScore=-Infinity;
+
   for(const t of targets){
     for(const p of POCKETS){
+      // Vector: target ball → pocket
       const tpDx=p.x-t.x, tpDy=p.y-t.y, tpD=Math.hypot(tpDx,tpDy);
       if(tpD<1) continue;
       const nx=-tpDx/tpD, ny=-tpDy/tpD;
+
+      // Ghost ball position (where cue ball must arrive)
       const ix=t.x+nx*BR*2, iy=t.y+ny*BR*2;
-      const dx=ix-cb.x, dy=iy-cb.y, dist=Math.hypot(dx,dy);
-      if(dist<1) continue;
-      const angle=Math.atan2(dy,dx);
-      let blocked=false;
-      for(const obs of balls){
-        if(obs===t||obs.isCue||obs.inPocket) continue;
-        const ex=obs.x-cb.x, ey=obs.y-cb.y;
-        const adx=Math.cos(angle), ady=Math.sin(angle);
-        const proj=ex*adx+ey*ady;
-        if(proj<0||proj>dist) continue;
-        if(Math.abs(ex*ady-ey*adx)<BR*2){blocked=true;break;}
+      const cdx=ix-cb.x, cdy=iy-cb.y, cueDist=Math.hypot(cdx,cdy);
+      if(cueDist<1) continue;
+      const cueAngle=Math.atan2(cdy,cdx);
+
+      // 1. Path from cue ball to ghost-ball position must be clear
+      if(!pathClear(cb.x,cb.y,cueAngle,cueDist,cb,t)) continue;
+
+      // 2. Path from target ball to pocket must be clear
+      const toPocketAngle=Math.atan2(tpDy,tpDx);
+      if(!pathClear(t.x,t.y,toPocketAngle,tpD,cb,t)) continue;
+
+      // Score: prefer short cue-travel, short ball-to-pocket, wide cut angles are harder
+      const cutAngle=Math.abs(Math.acos(Math.max(-1,Math.min(1,
+        (cdx/cueDist)*(-nx)+(cdy/cueDist)*(-ny)
+      ))));
+      // Sharp cuts (>75°) are very hard — penalise heavily
+      if(cutAngle>1.35) continue;
+
+      const score =
+        500 / (tpD + 1)          // prefer ball close to pocket
+        - cueDist * 0.25          // prefer short cue travel
+        - cutAngle * 60           // prefer straighter shots
+        + (Math.random() * 6);   // tiny noise (was 20 — now 6)
+
+      if(score>bestScore){
+        bestScore=score;
+        // Power: scale to cover cue→ghost distance, min 0.32 max 0.88
+        const neededPower=Math.min(0.88, Math.max(0.32, cueDist/700 + tpD/900 + 0.28));
+        // Tiny angle jitter (±1.5°) to feel human
+        const jitter=(Math.random()-0.5)*0.052;
+        best={angle:cueAngle+jitter, power:neededPower};
       }
-      if(blocked) continue;
-      const score=400/tpD-dist*0.3+Math.random()*20;
-      if(score>bestScore){bestScore=score; best={angle,power:0.35+Math.random()*0.38};}
     }
   }
+
+  // Fallback: aim at nearest ball toward its nearest pocket
   if(!best){
-    const t=targets.reduce((a,b)=>Math.hypot(a.x-cb.x,a.y-cb.y)<Math.hypot(b.x-cb.x,b.y-cb.y)?a:b);
-    best={angle:Math.atan2(t.y-cb.y,t.x-cb.x)+(Math.random()-.5)*.25, power:0.28+Math.random()*0.28};
+    const t=targets.reduce((a,b)=>
+      Math.hypot(a.x-cb.x,a.y-cb.y)<Math.hypot(b.x-cb.x,b.y-cb.y)?a:b
+    );
+    // Find nearest pocket to that ball
+    const bp=POCKETS.reduce((a,b)=>
+      Math.hypot(a.x-t.x,a.y-t.y)<Math.hypot(b.x-t.x,b.y-t.y)?a:b
+    );
+    const nx2=-(bp.x-t.x), ny2=-(bp.y-t.y);
+    const nd=Math.hypot(nx2,ny2);
+    const ix2=t.x+nx2/nd*BR*2, iy2=t.y+ny2/nd*BR*2;
+    const fa=Math.atan2(iy2-cb.y,ix2-cb.x)+(Math.random()-.5)*0.12;
+    best={angle:fa, power:0.38+Math.random()*0.25};
   }
   return best;
 }
