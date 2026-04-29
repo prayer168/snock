@@ -542,6 +542,13 @@ let overAlpha=0;           // 0→1 game-over overlay fade
 let scoreFlash={p:0,a:0};  // pulse scale for player/ai score pop
 let overStars=[];          // star particles for game-over screen
 
+// Strike animation: {angle, pullOffset, power, t, launched, isAI}
+// t: 0→1 over STRIKE_FRAMES frames
+// phase 0→0.35 : lunge forward; 0.35→1 : retract
+let strikeAnim=null;
+const STRIKE_FRAMES=14;  // total frames for full animation
+const LUNGE=28;           // how many px past ball centre the tip travels
+
 // 角度平滑插值（處理 -π/π 越界）
 function lerpAngle(a, b, t){
   let d=b-a;
@@ -669,9 +676,10 @@ function drawAimLine(cb,angle){
 }
 
 // ─── Draw: cue ───────────────────────────────────────────────────────────────
-function drawCue(cb,angle,pull){
+function drawCue(cb,angle,pull,overrideOff=null){
   if(!cb) return;
-  const len=250, off=BR+10+pull*30;
+  const len=250;
+  const off = overrideOff!==null ? overrideOff : BR+10+pull*30;
   const tx=cb.x-Math.cos(angle)*off, ty=cb.y-Math.sin(angle)*off;
   const bx=tx-Math.cos(angle)*len,   by=ty-Math.sin(angle)*len;
   ctx.save(); ctx.lineCap='round';
@@ -754,8 +762,8 @@ function drawScoreCard(x, y, w, h, label, score, accent, isActive, flashVal){
 
 // ─── Draw: turn pill ─────────────────────────────────────────────────────────
 function drawTurnPill(){
-  const isPlayer=(state==='player'||state==='moving');
-  const isAI=(state==='ai_think'||state==='ai_aim'||state==='ai_move');
+  const isPlayer=(state==='player'||state==='moving'||(state==='striking'&&strikeAnim&&!strikeAnim.isAI));
+  const isAI=(state==='ai_think'||state==='ai_aim'||state==='ai_move'||(state==='striking'&&strikeAnim&&strikeAnim.isAI));
   if(!isPlayer&&!isAI) return;
   const dots='.'.repeat((Math.floor(tick/10)%3)+1);
   let label='', col;
@@ -791,8 +799,8 @@ function drawHUD(){
   ctx.restore();
 
   // Score cards
-  const isPlayerTurn=(state==='player'||state==='moving');
-  const isAITurn=(state==='ai_think'||state==='ai_aim'||state==='ai_move');
+  const isPlayerTurn=(state==='player'||state==='moving'||(state==='striking'&&strikeAnim&&!strikeAnim.isAI));
+  const isAITurn=(state==='ai_think'||state==='ai_aim'||state==='ai_move'||(state==='striking'&&strikeAnim&&strikeAnim.isAI));
   scoreFlash.p=Math.max(0,scoreFlash.p-0.08);
   scoreFlash.a=Math.max(0,scoreFlash.a-0.08);
   drawScoreCard(8,  CH-54, 90,48, '玩 家', playerScore, '100,180,255', isPlayerTurn, scoreFlash.p);
@@ -919,11 +927,30 @@ function update(){
     if(aiTimer<=0){
       const cb=getCue();
       if(cb&&aiShot){
-        sfxCue(aiShot.power);
-        cb.vx=Math.cos(aiShot.angle)*aiShot.power*MAX_POWER;
-        cb.vy=Math.sin(aiShot.angle)*aiShot.power*MAX_POWER;
-        state='ai_move'; aiShot=null;
+        // AI also uses strike animation
+        strikeAnim={angle:aiShot.angle, pullOffset:aiShot.power*30, power:aiShot.power, t:0, launched:false, isAI:true};
+        state='striking';
+        aiShot=null;
       } else {state='player';}
+    }
+  }
+
+  // Strike animation
+  if(state==='striking'&&strikeAnim){
+    strikeAnim.t+=1/STRIKE_FRAMES;
+    // Launch ball at peak of lunge (t=0.35)
+    if(!strikeAnim.launched && strikeAnim.t>=0.35){
+      strikeAnim.launched=true;
+      const cb=getCue();
+      if(cb){
+        sfxCue(strikeAnim.power);
+        cb.vx=Math.cos(strikeAnim.angle)*strikeAnim.power*MAX_POWER;
+        cb.vy=Math.sin(strikeAnim.angle)*strikeAnim.power*MAX_POWER;
+      }
+    }
+    if(strikeAnim.t>=1){
+      state=strikeAnim.isAI ? 'ai_move' : 'moving';
+      strikeAnim=null;
     }
   }
 }
@@ -1039,6 +1066,23 @@ function draw(){
     ctx.save(); ctx.globalAlpha=0.5; drawAimLine(cb,aiShot.angle); ctx.restore();
     drawCue(cb,aiShot.angle,0);
   }
+  if(state==='striking'&&strikeAnim&&cb){
+    // t: 0→0.35 lunge forward, 0.35→1 retract
+    const t=strikeAnim.t;
+    let off;
+    if(t<0.35){
+      // ease-in: pull → -LUNGE (tip punches past ball)
+      const p=t/0.35;
+      const eased=p*p;  // accelerate into hit
+      off=strikeAnim.pullOffset*(1-eased) + (-LUNGE)*eased;
+    } else {
+      // retract: -LUNGE → pullOffset (bounce back)
+      const p=(t-0.35)/0.65;
+      const eased=1-Math.pow(1-p,2);  // decelerate
+      off=(-LUNGE)*(1-eased) + (BR+10+strikeAnim.pullOffset)*eased;
+    }
+    drawCue(cb, strikeAnim.angle, 0, Math.max(-LUNGE, off));
+  }
   if(state!=='intro') drawHUD();
   if(state==='intro') drawIntro();
   if(state==='over')  drawOver();
@@ -1066,13 +1110,10 @@ canvas.addEventListener('mouseup',e=>{
   if(e.button===0&&state==='player'&&charging){
     charging=false;
     if(power>0.06){
-      const cb=getCue();
-      if(cb){
-        sfxCue(power);
-        cb.vx=Math.cos(aimAngle)*power*MAX_POWER;
-        cb.vy=Math.sin(aimAngle)*power*MAX_POWER;
-        state='moving'; power=0;
-      }
+      // Start strike animation; ball launches mid-animation
+      strikeAnim={angle:aimAngle, pullOffset:power*30, power, t:0, launched:false, isAI:false};
+      state='striking';
+      power=0;
     }
   }
 });
