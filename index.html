@@ -536,6 +536,12 @@ let aiTimer, aiShot;
 let playerScore, aiScore, prevPocketed, tick;
 let gameOverSfxPlayed=false;
 
+// UI animation state
+let introAlpha=0;          // 0→1 fade-in on first load
+let overAlpha=0;           // 0→1 game-over overlay fade
+let scoreFlash={p:0,a:0};  // pulse scale for player/ai score pop
+let overStars=[];          // star particles for game-over screen
+
 // 角度平滑插值（處理 -π/π 越界）
 function lerpAngle(a, b, t){
   let d=b-a;
@@ -545,11 +551,14 @@ function lerpAngle(a, b, t){
 }
 
 function init(){
-  balls=makeBalls(); state='player';
+  balls=makeBalls(); state='intro';
   aimAngle=0; targetAngle=0; power=0; charging=false;
   aiTimer=0; aiShot=null;
   playerScore=0; aiScore=0; prevPocketed=0; tick=0;
   gameOverSfxPlayed=false;
+  introAlpha=0; overAlpha=0;
+  scoreFlash={p:0,a:0};
+  overStars=[];
 }
 init();
 
@@ -698,57 +707,106 @@ function drawPower(pwr){
 }
 
 // ─── Draw: mute button ───────────────────────────────────────────────────────
-const MUTE_BTN={x:CW-108, y:8, w:100, h:28};
+const MUTE_BTN={x:CW/2-46, y:CH-38, w:92, h:26};
 function drawMuteBtn(){
-  ctx.fillStyle=muted?'rgba(200,60,60,0.82)':'rgba(40,160,80,0.82)';
-  rr(MUTE_BTN.x,MUTE_BTN.y,MUTE_BTN.w,MUTE_BTN.h,6); ctx.fill();
-  ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1; ctx.stroke();
-  ctx.fillStyle='#fff'; ctx.font='13px Arial'; ctx.textAlign='center';
-  ctx.fillText(muted?'🔇 已靜音':'🔊 音效開', MUTE_BTN.x+MUTE_BTN.w/2, MUTE_BTN.y+19);
+  ctx.save();
+  ctx.fillStyle=muted?'rgba(180,50,50,0.85)':'rgba(30,130,60,0.85)';
+  rr(MUTE_BTN.x,MUTE_BTN.y,MUTE_BTN.w,MUTE_BTN.h,13); ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,0.18)'; ctx.lineWidth=1; ctx.stroke();
+  ctx.fillStyle='#fff'; ctx.font='12px Arial'; ctx.textAlign='center';
+  ctx.fillText(muted?'🔇 已靜音':'🔊 音效開', MUTE_BTN.x+MUTE_BTN.w/2, MUTE_BTN.y+17);
+  ctx.restore();
 }
-
 function inMuteBtn(x,y){
   return x>=MUTE_BTN.x&&x<=MUTE_BTN.x+MUTE_BTN.w&&y>=MUTE_BTN.y&&y<=MUTE_BTN.y+MUTE_BTN.h;
 }
 
+// ─── Draw: score card ────────────────────────────────────────────────────────
+function drawScoreCard(x, y, w, h, label, score, accent, isActive, flashVal){
+  ctx.save();
+  // Card background
+  const bg=ctx.createLinearGradient(x,y,x,y+h);
+  bg.addColorStop(0, isActive?`rgba(${accent},0.22)`:`rgba(${accent},0.08)`);
+  bg.addColorStop(1, 'rgba(0,0,0,0.55)');
+  rr(x,y,w,h,10); ctx.fillStyle=bg; ctx.fill();
+  // Active border glow
+  if(isActive){
+    ctx.shadowColor=`rgba(${accent},0.9)`; ctx.shadowBlur=12;
+    ctx.strokeStyle=`rgba(${accent},0.85)`; ctx.lineWidth=2;
+  } else {
+    ctx.strokeStyle=`rgba(${accent},0.22)`; ctx.lineWidth=1;
+  }
+  ctx.stroke(); ctx.shadowBlur=0;
+  // Label
+  ctx.fillStyle=`rgba(${accent},0.85)`; ctx.font='bold 12px Arial';
+  ctx.textAlign='center';
+  ctx.fillText(label, x+w/2, y+16);
+  // Score with pop scale
+  const sc=1+flashVal*0.35;
+  ctx.save(); ctx.translate(x+w/2, y+h-10);
+  ctx.scale(sc,sc);
+  ctx.fillStyle='#fff'; ctx.font=`bold 26px Arial`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(score, 0, 0);
+  ctx.restore();
+  ctx.restore();
+}
+
+// ─── Draw: turn pill ─────────────────────────────────────────────────────────
+function drawTurnPill(){
+  const isPlayer=(state==='player'||state==='moving');
+  const isAI=(state==='ai_think'||state==='ai_aim'||state==='ai_move');
+  if(!isPlayer&&!isAI) return;
+  const dots='.'.repeat((Math.floor(tick/10)%3)+1);
+  let label='', col;
+  if(isPlayer){ label='● 你的回合'; col='100,180,255'; }
+  else { label=`● AI ${state==='ai_think'?`思考中${dots}`:'出杆中'}`; col='255,200,80'; }
+  const pw=ctx.measureText(label).width+28;
+  const px=CW/2-pw/2, py=CH-54-32, ph=22;
+  ctx.save();
+  ctx.fillStyle=`rgba(${col},0.18)`;
+  rr(px,py,pw,ph,11); ctx.fill();
+  ctx.strokeStyle=`rgba(${col},0.55)`; ctx.lineWidth=1.2; ctx.stroke();
+  ctx.fillStyle=`rgba(${col},1)`; ctx.font='bold 13px Arial';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.shadowColor=`rgba(${col},0.8)`; ctx.shadowBlur=8;
+  ctx.fillText(label, CW/2, py+ph/2);
+  ctx.restore();
+}
+
 // ─── Draw: HUD ───────────────────────────────────────────────────────────────
 function drawHUD(){
-  ctx.fillStyle='rgba(0,0,0,0.78)'; ctx.fillRect(0,CH-44,CW,44);
-  ctx.strokeStyle='rgba(80,50,20,0.6)'; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(0,CH-44); ctx.lineTo(CW,CH-44); ctx.stroke();
+  // Bottom bar
+  const barG=ctx.createLinearGradient(0,CH-56,0,CH);
+  barG.addColorStop(0,'rgba(0,0,0,0)');
+  barG.addColorStop(0.25,'rgba(5,3,2,0.92)');
+  barG.addColorStop(1,'rgba(5,3,2,0.98)');
+  ctx.fillStyle=barG; ctx.fillRect(0,CH-56,CW,56);
 
-  let msg='', col='#fff';
-  const dots='.'.repeat((Math.floor(tick/14)%3)+1);
-  if     (state==='player')  {msg='你的回合 — 滑鼠瞄準，按住左鍵蓄力，放開擊球';col='#aaddff';}
-  else if(state==='moving')  {msg='球運動中…';col='#ccc';}
-  else if(state==='ai_think'){msg=`AI 思考中${dots}`;col='#FFD700';}
-  else if(state==='ai_aim')  {msg='AI 瞄準中…';col='#FFD700';}
-  else if(state==='ai_move') {msg='AI 擊球';col='#ffbb44';}
-  else if(state==='over')    {msg='遊戲結束！點擊任意處重新開始';col='#FFD700';}
+  // Separator line with glow
+  ctx.save();
+  ctx.strokeStyle='rgba(120,80,30,0.5)'; ctx.lineWidth=1;
+  ctx.shadowColor='rgba(200,140,50,0.2)'; ctx.shadowBlur=4;
+  ctx.beginPath(); ctx.moveTo(0,CH-56); ctx.lineTo(CW,CH-56); ctx.stroke();
+  ctx.restore();
 
-  ctx.fillStyle=col; ctx.font='15px Arial'; ctx.textAlign='center';
-  ctx.fillText(msg,CW/2,CH-16);
-  ctx.fillStyle='rgba(200,200,200,0.55)'; ctx.font='12px Arial';
-  ctx.fillText(`剩餘 ${activeBalls().length} 球`,CW/2,CH-30);
+  // Score cards
+  const isPlayerTurn=(state==='player'||state==='moving');
+  const isAITurn=(state==='ai_think'||state==='ai_aim'||state==='ai_move');
+  scoreFlash.p=Math.max(0,scoreFlash.p-0.08);
+  scoreFlash.a=Math.max(0,scoreFlash.a-0.08);
+  drawScoreCard(8,  CH-54, 90,48, '玩 家', playerScore, '100,180,255', isPlayerTurn, scoreFlash.p);
+  drawScoreCard(CW-98, CH-54, 90,48, 'A I', aiScore, '255,190,60', isAITurn, scoreFlash.a);
 
-  ctx.textAlign='left';
-  ctx.fillStyle='#7ec8ff'; ctx.font='bold 14px Arial'; ctx.fillText('玩家',15,CH-27);
-  ctx.fillStyle='#aaddff'; ctx.font='bold 21px Arial'; ctx.fillText(playerScore,15,CH-9);
+  // Centre info
+  ctx.textAlign='center';
+  ctx.fillStyle='rgba(180,180,180,0.5)'; ctx.font='11px Arial';
+  ctx.fillText(`剩餘 ${activeBalls().length} 球`, CW/2, CH-8);
 
-  ctx.textAlign='right';
-  ctx.fillStyle='#ffc870'; ctx.font='bold 14px Arial'; ctx.fillText('AI',CW-15,CH-27);
-  ctx.fillStyle='#ffddaa'; ctx.font='bold 21px Arial'; ctx.fillText(aiScore,CW-15,CH-9);
+  // Turn pill
+  drawTurnPill();
 
-  if(state==='player'||state==='moving'){
-    ctx.fillStyle='rgba(100,180,255,0.13)'; ctx.fillRect(0,CH-44,75,44);
-    ctx.strokeStyle='rgba(100,180,255,0.38)'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(75,CH-44); ctx.lineTo(0,CH-44); ctx.lineTo(0,CH); ctx.stroke();
-  }
-  if(state==='ai_think'||state==='ai_aim'||state==='ai_move'){
-    ctx.fillStyle='rgba(255,200,80,0.11)'; ctx.fillRect(CW-75,CH-44,75,44);
-    ctx.strokeStyle='rgba(255,200,80,0.38)'; ctx.lineWidth=2;
-    ctx.beginPath(); ctx.moveTo(CW-75,CH-44); ctx.lineTo(CW,CH-44); ctx.lineTo(CW,CH); ctx.stroke();
-  }
+  // Mute button
   drawMuteBtn();
 }
 
@@ -798,6 +856,27 @@ function respawnCue(){
 // ─── Update ───────────────────────────────────────────────────────────────────
 function update(){
   tick++;
+
+  // Intro fade-in
+  if(state==='intro'){ introAlpha=Math.min(1,introAlpha+0.025); return; }
+
+  // Game-over animation
+  if(state==='over'){
+    overAlpha=Math.min(1,overAlpha+0.04);
+    // Spawn celebratory stars
+    if(overStars.length<60&&Math.random()<0.35){
+      overStars.push({
+        x:Math.random()*CW, y:Math.random()*CH,
+        r:1.5+Math.random()*3,
+        life:0.6+Math.random()*0.4,
+        color:`hsl(${40+Math.random()*40},100%,${60+Math.random()*30}%)`
+      });
+    }
+    for(const s of overStars){ s.y-=0.4; s.life-=0.005; }
+    overStars.splice(0, overStars.length, ...overStars.filter(s=>s.life>0));
+    return;
+  }
+
   if(state==='player'&&charging) power=Math.min(1,power+0.013);
   if(state==='player') aimAngle=lerpAngle(aimAngle, targetAngle, 0.18);
   updateParticles();
@@ -811,13 +890,14 @@ function update(){
     const now=balls.filter(b=>!b.isCue&&b.inPocket).length;
     if(now>prevPocketed){
       const d=now-prevPocketed;
-      if(state==='moving') playerScore+=d; else aiScore+=d;
+      if(state==='moving'){ playerScore+=d; scoreFlash.p=1; }
+      else                { aiScore+=d;     scoreFlash.a=1; }
       prevPocketed=now;
     }
     if(allStop()){
       if(!getCue()) respawnCue();
       if(!activeBalls().length){
-        state='over';
+        state='over'; overAlpha=0;
         if(!gameOverSfxPlayed){sfxGameOver();gameOverSfxPlayed=true;}
         return;
       }
@@ -848,6 +928,103 @@ function update(){
   }
 }
 
+// ─── Draw: intro screen ──────────────────────────────────────────────────────
+function drawIntro(){
+  ctx.save(); ctx.globalAlpha=introAlpha;
+
+  // Dark vignette
+  ctx.fillStyle='rgba(0,0,0,0.62)'; ctx.fillRect(0,0,CW,CH);
+
+  // Title glow halo
+  const halo=ctx.createRadialGradient(CW/2,CH/2-30,10,CW/2,CH/2-30,220);
+  halo.addColorStop(0,'rgba(60,180,90,0.18)');
+  halo.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=halo; ctx.fillRect(0,0,CW,CH);
+
+  // Title
+  ctx.textAlign='center';
+  ctx.shadowColor='rgba(50,220,100,0.7)'; ctx.shadowBlur=24;
+  ctx.fillStyle='#e8ffe8'; ctx.font='bold 58px Arial';
+  ctx.fillText('撞球遊戲', CW/2, CH/2-40);
+  ctx.shadowBlur=0;
+
+  // Subtitle
+  ctx.fillStyle='rgba(200,255,210,0.75)'; ctx.font='18px Arial';
+  ctx.fillText('台球練習模式　玩家 vs AI', CW/2, CH/2+10);
+
+  // Start hint pulsing
+  const pulse=0.65+0.35*Math.sin(tick*0.08);
+  ctx.globalAlpha=introAlpha*pulse;
+  ctx.fillStyle='#FFD700'; ctx.font='bold 16px Arial';
+  ctx.shadowColor='rgba(255,210,0,0.6)'; ctx.shadowBlur=10;
+  ctx.fillText('點擊任意處開始', CW/2, CH/2+60);
+  ctx.shadowBlur=0;
+
+  // Controls hint
+  ctx.globalAlpha=introAlpha*0.55;
+  ctx.fillStyle='#aaa'; ctx.font='13px Arial';
+  ctx.fillText('按住左鍵蓄力　放開擊球　滑鼠瞄準', CW/2, CH/2+95);
+
+  ctx.restore();
+}
+
+// ─── Draw: game-over screen ──────────────────────────────────────────────────
+function drawOver(){
+  if(overAlpha<=0) return;
+  ctx.save(); ctx.globalAlpha=overAlpha;
+
+  // Overlay
+  ctx.fillStyle='rgba(0,0,0,0.80)'; ctx.fillRect(0,0,CW,CH);
+
+  // Star particles
+  for(const s of overStars){
+    ctx.save();
+    ctx.globalAlpha=overAlpha*s.life;
+    ctx.fillStyle=s.color;
+    ctx.shadowColor=s.color; ctx.shadowBlur=6;
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  // Card
+  const cw=380, ch=220, cx=CW/2-cw/2, cy=CH/2-ch/2;
+  const cg=ctx.createLinearGradient(cx,cy,cx,cy+ch);
+  cg.addColorStop(0,'rgba(30,20,10,0.95)');
+  cg.addColorStop(1,'rgba(10,8,4,0.98)');
+  rr(cx,cy,cw,ch,18); ctx.fillStyle=cg; ctx.fill();
+  ctx.strokeStyle='rgba(200,160,40,0.55)'; ctx.lineWidth=2; ctx.stroke();
+
+  // Title
+  ctx.textAlign='center';
+  ctx.shadowColor='rgba(255,200,0,0.8)'; ctx.shadowBlur=16;
+  ctx.fillStyle='#FFD700'; ctx.font='bold 38px Arial';
+  ctx.fillText('遊戲結束', CW/2, cy+52);
+  ctx.shadowBlur=0;
+
+  // Score
+  ctx.fillStyle='#fff'; ctx.font='bold 28px Arial';
+  ctx.fillText(`${playerScore}  :  ${aiScore}`, CW/2, cy+102);
+  ctx.fillStyle='rgba(180,180,180,0.7)'; ctx.font='13px Arial';
+  ctx.fillText('玩家　　　　AI', CW/2, cy+122);
+
+  // Result
+  const isWin=playerScore>playerScore+aiScore-playerScore; // always false trick — just compare
+  const result= playerScore>aiScore ? '玩家勝利 🎉' : playerScore<aiScore ? 'AI 勝利 🤖' : '平局 🤝';
+  const rc    = playerScore>aiScore ? '100,220,120' : playerScore<aiScore ? '255,160,60' : '180,180,180';
+  ctx.shadowColor=`rgba(${rc},0.7)`; ctx.shadowBlur=10;
+  ctx.fillStyle=`rgb(${rc})`; ctx.font='bold 20px Arial';
+  ctx.fillText(result, CW/2, cy+158);
+  ctx.shadowBlur=0;
+
+  // Restart hint
+  const pulse=0.6+0.4*Math.sin(tick*0.07);
+  ctx.globalAlpha=overAlpha*pulse;
+  ctx.fillStyle='rgba(200,200,200,0.7)'; ctx.font='14px Arial';
+  ctx.fillText('點擊任意處重新開始', CW/2, cy+195);
+
+  ctx.restore();
+}
+
 // ─── Draw ────────────────────────────────────────────────────────────────────
 function draw(){
   drawTable();
@@ -862,17 +1039,9 @@ function draw(){
     ctx.save(); ctx.globalAlpha=0.5; drawAimLine(cb,aiShot.angle); ctx.restore();
     drawCue(cb,aiShot.angle,0);
   }
-  drawHUD();
-  if(state==='over'){
-    ctx.fillStyle='rgba(0,0,0,0.75)'; ctx.fillRect(0,0,CW,CH);
-    ctx.textAlign='center';
-    ctx.fillStyle='#FFD700'; ctx.font='bold 44px Arial'; ctx.fillText('遊戲結束！',CW/2,CH/2-48);
-    ctx.fillStyle='#fff'; ctx.font='28px Arial';
-    ctx.fillText(`玩家 ${playerScore}  :  ${aiScore} AI`,CW/2,CH/2+8);
-    const w=playerScore>aiScore?'玩家勝利 🎉':playerScore<aiScore?'AI 勝利':'平局';
-    ctx.fillStyle='#FFD700'; ctx.font='bold 22px Arial'; ctx.fillText(w,CW/2,CH/2+54);
-    ctx.fillStyle='#aaa'; ctx.font='15px Arial'; ctx.fillText('點擊任意處重新開始',CW/2,CH/2+100);
-  }
+  if(state!=='intro') drawHUD();
+  if(state==='intro') drawIntro();
+  if(state==='over')  drawOver();
 }
 
 // ─── Input ────────────────────────────────────────────────────────────────────
@@ -888,8 +1057,9 @@ canvas.addEventListener('mousedown',e=>{
   const cx=e.clientX-rc.left, cy=e.clientY-rc.top;
   initAudio(); startMusic();
   if(inMuteBtn(cx,cy)){toggleMute();return;}
+  if(state==='intro'){ state='player'; return; }
+  if(state==='over'){ init(); state='player'; return; }
   if(state==='player'){charging=true;power=0;}
-  if(state==='over'){init();}
 });
 
 canvas.addEventListener('mouseup',e=>{
