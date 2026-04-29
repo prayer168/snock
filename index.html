@@ -284,11 +284,23 @@ class Ball {
     this.num=num; this.color=COLORS[num]||'#fff';
     this.isCue=(num===0); this.isStripe=(num>=9);
     this.inPocket=false; this.sinkT=1.0;
+    this.angle=0;          // rolling rotation
+    this.trail=[];         // [{x,y,a}] motion trail
   }
   get moving(){return this.vx!==0||this.vy!==0;}
   update(){
     if(this.inPocket){this.sinkT=Math.max(0,this.sinkT-0.08);return;}
+    // Motion trail
+    const spd2=Math.hypot(this.vx,this.vy);
+    if(spd2>1.8){
+      this.trail.push({x:this.x,y:this.y,a:0.38*Math.min(1,spd2/8)});
+      if(this.trail.length>7) this.trail.shift();
+    } else { this.trail=[]; }
+
     this.x+=this.vx; this.y+=this.vy;
+    // Rolling rotation angle
+    const dist2=Math.hypot(this.vx,this.vy);
+    this.angle+=dist2/BR;
     this.vx*=FRICTION; this.vy*=FRICTION;
     if(Math.abs(this.vx)<MIN_V) this.vx=0;
     if(Math.abs(this.vy)<MIN_V) this.vy=0;
@@ -296,7 +308,10 @@ class Ball {
     for(const p of POCKETS){
       if(Math.hypot(this.x-p.x,this.y-p.y)<PR){
         this.inPocket=true; this.vx=this.vy=0;
-        sfxPocket(); return;
+        sfxPocket();
+        spawnPocketFlash(this.x,this.y);
+        spawnFloatText(this.x,this.y-24,'+1',this.isCue?'#ff8888':'#FFD700');
+        return;
       }
     }
 
@@ -309,8 +324,37 @@ class Ball {
   }
   draw(){
     if(this.inPocket&&this.sinkT<=0) return;
+
+    // Motion trail
+    for(let i=0;i<this.trail.length;i++){
+      const t=this.trail[i];
+      const frac=(i+1)/this.trail.length;
+      ctx.save();
+      ctx.globalAlpha=t.a*frac*0.55;
+      ctx.beginPath();
+      ctx.arc(t.x,t.y,BR*frac*0.85,0,Math.PI*2);
+      ctx.fillStyle=this.isCue?'#ffffff':this.color;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Ground shadow
+    if(!this.inPocket){
+      ctx.save();
+      ctx.globalAlpha=0.28;
+      ctx.beginPath();
+      ctx.ellipse(this.x+3, this.y+BR*0.55, BR*0.85, BR*0.32, 0, 0, Math.PI*2);
+      ctx.fillStyle='#000';
+      ctx.filter='blur(3px)';
+      ctx.fill();
+      ctx.filter='none';
+      ctx.restore();
+    }
+
     ctx.save(); ctx.translate(this.x,this.y);
     if(this.inPocket) ctx.scale(this.sinkT,this.sinkT);
+    // Rolling: rotate a subtle mark on the ball
+    ctx.rotate(this.angle);
     this._render(); ctx.restore();
   }
   _render(){
@@ -344,6 +388,83 @@ class Ball {
   }
 }
 
+// ─── Particles ───────────────────────────────────────────────────────────────
+const particles=[];
+
+function spawnSpark(x,y,color,n=8){
+  for(let i=0;i<n;i++){
+    const ang=Math.random()*Math.PI*2;
+    const spd=1.5+Math.random()*3.5;
+    particles.push({
+      x,y,
+      vx:Math.cos(ang)*spd, vy:Math.sin(ang)*spd,
+      r:2+Math.random()*2.5,
+      life:1.0,
+      decay:0.045+Math.random()*0.04,
+      color
+    });
+  }
+}
+
+function spawnPocketFlash(x,y){
+  for(let i=0;i<18;i++){
+    const ang=Math.random()*Math.PI*2;
+    const spd=2+Math.random()*5;
+    particles.push({
+      x,y,
+      vx:Math.cos(ang)*spd, vy:Math.sin(ang)*spd,
+      r:3+Math.random()*4,
+      life:1.0,
+      decay:0.035+Math.random()*0.03,
+      color:`hsl(${40+Math.random()*30},100%,70%)`
+    });
+  }
+}
+
+// Score float texts
+const floatTexts=[];
+function spawnFloatText(x,y,txt,col){
+  floatTexts.push({x,y,txt,col,life:1.0,vy:-1.2});
+}
+
+function updateParticles(){
+  for(let i=particles.length-1;i>=0;i--){
+    const p=particles[i];
+    p.x+=p.vx; p.y+=p.vy;
+    p.vx*=0.88; p.vy*=0.88;
+    p.life-=p.decay;
+    if(p.life<=0) particles.splice(i,1);
+  }
+  for(let i=floatTexts.length-1;i>=0;i--){
+    const t=floatTexts[i];
+    t.y+=t.vy; t.life-=0.022;
+    if(t.life<=0) floatTexts.splice(i,1);
+  }
+}
+
+function drawParticles(){
+  for(const p of particles){
+    ctx.save();
+    ctx.globalAlpha=p.life*0.9;
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,p.r*p.life,0,Math.PI*2);
+    ctx.fillStyle=p.color;
+    ctx.shadowColor=p.color; ctx.shadowBlur=6;
+    ctx.fill();
+    ctx.restore();
+  }
+  for(const t of floatTexts){
+    ctx.save();
+    ctx.globalAlpha=t.life;
+    ctx.font='bold 18px Arial';
+    ctx.textAlign='center';
+    ctx.fillStyle=t.col;
+    ctx.shadowColor='#000'; ctx.shadowBlur=5;
+    ctx.fillText(t.txt,t.x,t.y);
+    ctx.restore();
+  }
+}
+
 // ─── Collision ────────────────────────────────────────────────────────────────
 function resolveCollision(a,b){
   if(a.inPocket||b.inPocket) return;
@@ -352,7 +473,12 @@ function resolveCollision(a,b){
   const nx=dx/d, ny=dy/d;
   const vrel=(a.vx-b.vx)*nx+(a.vy-b.vy)*ny;
   if(vrel<=0) return;
-  if(vrel>0.4) sfxBallHit(vrel/MAX_POWER);
+  if(vrel>0.4){
+    sfxBallHit(vrel/MAX_POWER);
+    const mx2=(a.x+b.x)/2, my2=(a.y+b.y)/2;
+    const col=a.isCue?b.color:a.color;
+    spawnSpark(mx2,my2,col, Math.min(12,Math.ceil(vrel*1.8)));
+  }
   const imp=vrel*REST_BALL;
   a.vx-=imp*nx; a.vy-=imp*ny;
   b.vx+=imp*nx; b.vy+=imp*ny;
@@ -486,21 +612,49 @@ function drawTable(){
 function drawAimLine(cb,angle){
   const{ex,ey,hitBall}=raycast(cb.x,cb.y,angle);
   ctx.save();
-  ctx.setLineDash([9,6]); ctx.strokeStyle='rgba(255,255,210,0.65)'; ctx.lineWidth=1.5;
+
+  // Gradient fade-out along guide line
+  const lineGrad=ctx.createLinearGradient(cb.x,cb.y,ex,ey);
+  lineGrad.addColorStop(0,  'rgba(255,255,200,0.75)');
+  lineGrad.addColorStop(0.5,'rgba(255,255,180,0.45)');
+  lineGrad.addColorStop(1,  'rgba(255,255,160,0.05)');
+  ctx.setLineDash([9,6]);
+  ctx.strokeStyle=lineGrad;
+  ctx.lineWidth=1.8;
   ctx.beginPath(); ctx.moveTo(cb.x,cb.y); ctx.lineTo(ex,ey); ctx.stroke();
+
   if(hitBall){
+    // Ghost ball at impact with soft glow
     ctx.setLineDash([]);
+    ctx.shadowColor='rgba(255,255,255,0.5)'; ctx.shadowBlur=8;
     ctx.beginPath(); ctx.arc(ex,ey,BR,0,Math.PI*2);
-    ctx.strokeStyle='rgba(255,255,255,0.32)'; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.strokeStyle='rgba(255,255,255,0.45)'; ctx.lineWidth=1.8; ctx.stroke();
+    ctx.shadowBlur=0;
+
+    // Target ball deflect arrow
     const bA=Math.atan2(hitBall.y-ey,hitBall.x-ex);
+    const bGrad=ctx.createLinearGradient(ex,ey, ex+Math.cos(bA)*90,ey+Math.sin(bA)*90);
+    bGrad.addColorStop(0,'rgba(255,210,60,0.7)');
+    bGrad.addColorStop(1,'rgba(255,210,60,0.04)');
     ctx.setLineDash([5,6]);
     ctx.beginPath(); ctx.moveTo(ex,ey);
-    ctx.lineTo(ex+Math.cos(bA)*90,ey+Math.sin(bA)*90);
-    ctx.strokeStyle='rgba(255,200,80,0.4)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.lineTo(ex+Math.cos(bA)*90, ey+Math.sin(bA)*90);
+    ctx.strokeStyle=bGrad; ctx.lineWidth=1.2; ctx.stroke();
+
+    // Cue ball deflect arrow
     const cA=bA-Math.PI/2;
+    const cGrad=ctx.createLinearGradient(ex,ey, ex+Math.cos(cA)*65,ey+Math.sin(cA)*65);
+    cGrad.addColorStop(0,'rgba(160,255,160,0.6)');
+    cGrad.addColorStop(1,'rgba(160,255,160,0.03)');
     ctx.beginPath(); ctx.moveTo(ex,ey);
-    ctx.lineTo(ex+Math.cos(cA)*65,ey+Math.sin(cA)*65);
-    ctx.strokeStyle='rgba(180,255,180,0.3)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.lineTo(ex+Math.cos(cA)*65, ey+Math.sin(cA)*65);
+    ctx.strokeStyle=cGrad; ctx.lineWidth=1.2; ctx.stroke();
+
+    // Impact dot
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(ex,ey,3,0,Math.PI*2);
+    ctx.fillStyle='rgba(255,255,255,0.65)';
+    ctx.shadowColor='#fff'; ctx.shadowBlur=6; ctx.fill(); ctx.shadowBlur=0;
   }
   ctx.setLineDash([]); ctx.restore();
 }
@@ -646,6 +800,7 @@ function update(){
   tick++;
   if(state==='player'&&charging) power=Math.min(1,power+0.013);
   if(state==='player') aimAngle=lerpAngle(aimAngle, targetAngle, 0.18);
+  updateParticles();
 
   if(state==='moving'||state==='ai_move'){
     for(const b of balls) b.update();
@@ -697,6 +852,7 @@ function update(){
 function draw(){
   drawTable();
   for(const b of balls) b.draw();
+  drawParticles();
   const cb=getCue();
   if(state==='player'&&cb){
     drawAimLine(cb,aimAngle); drawCue(cb,aimAngle,charging?power:0);
