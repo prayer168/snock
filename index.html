@@ -38,7 +38,7 @@ const PW=FW-RAIL*2, PH=FH-RAIL*2;   // 836 × 456
 
 // ─── Physics constants ───────────────────────────────────────────────────────
 const BR=12, PR=20;
-const FRICTION=0.988, MIN_V=0.07;
+const FRICTION=0.972, MIN_V=0.18;
 const REST_BALL=0.93, REST_WALL=0.80;
 const MAX_POWER=24;
 
@@ -822,7 +822,7 @@ function update(){
         return;
       }
       if(state==='moving'){
-        state='ai_think'; aiTimer=75+Math.floor(Math.random()*65); aiShot=null;
+        state='ai_think'; aiTimer=25+Math.floor(Math.random()*20); aiShot=null;
       } else {
         state='player';
       }
@@ -831,7 +831,7 @@ function update(){
 
   if(state==='ai_think'){
     aiTimer--;
-    if(aiTimer<=0){aiShot=computeAIShot(); state='ai_aim'; aiTimer=50;}
+    if(aiTimer<=0){aiShot=computeAIShot(); state='ai_aim'; aiTimer=22;}
   }
 
   if(state==='ai_aim'){
