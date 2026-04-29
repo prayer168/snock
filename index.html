@@ -38,9 +38,9 @@ const PW=FW-RAIL*2, PH=FH-RAIL*2;   // 836 × 456
 
 // ─── Physics constants ───────────────────────────────────────────────────────
 const BR=12, PR=20;
-const FRICTION=0.972, MIN_V=0.18;
+const FRICTION=0.968, MIN_V=0.22;
 const REST_BALL=0.93, REST_WALL=0.80;
-const MAX_POWER=24;
+const MAX_POWER=32;
 
 // ─── Pockets ─────────────────────────────────────────────────────────────────
 const POCKETS=[
@@ -877,7 +877,7 @@ function update(){
     return;
   }
 
-  if(state==='player'&&charging) power=Math.min(1,power+0.013);
+  if(state==='player'&&charging) power=Math.min(1,power+0.028);
   if(state==='player') aimAngle=lerpAngle(aimAngle, targetAngle, 0.18);
   updateParticles();
 
